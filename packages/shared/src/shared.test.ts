@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_MANIFEST, HERO_LAYER_ORDER, stepAnimFrame, type AnimSection } from './assets.ts';
 import { Dir, DIR_DELTA, cellDistance, cellToScreen, dirTo, screenToCell, step } from './grid.ts';
+import { canStep, findPath, isCellWalkable, pathToSteps } from './pathfinding.ts';
 import { CLASSES, isValidClassGender } from './races.ts';
 import {
   parseFlareAnimTxt,
@@ -261,5 +262,66 @@ level=3
       { kind: 'npc', id: 'tutorial', x: 0, y: 1 },
       { kind: 'enemy', id: 'zombie', x: 1, y: 0, level: 3 },
     ]);
+  });
+});
+
+describe('pathfinding', () => {
+  const grid = [
+    [0, 0, 1, 0, 0],
+    [0, 0, 1, 0, 0],
+    [0, 0, 1, 0, 0],
+    [0, 0, 0, 0, 0],
+    [0, 0, 1, 0, 0],
+  ];
+
+  it('checks walkability and 1/2-step bounds', () => {
+    expect(isCellWalkable(grid, 0, 0)).toBe(true);
+    expect(isCellWalkable(grid, 2, 0)).toBe(false);
+    expect(isCellWalkable(grid, -1, 0)).toBe(false);
+
+    // Dir.SE = (+1, 0): from (0,0) -> (1,0) ok, -> (2,0) wall!
+    expect(canStep(grid, { x: 0, y: 0 }, Dir.SE, 1)).toEqual({ ok: true, to: { x: 1, y: 0 } });
+    expect(canStep(grid, { x: 0, y: 0 }, Dir.SE, 2)).toEqual({ ok: false });
+
+    // Running from (1,3) across (2,3) to (3,3) succeeds; running from (1,0) over (2,0) wall fails
+    expect(canStep(grid, { x: 1, y: 3 }, Dir.SE, 2)).toEqual({ ok: true, to: { x: 3, y: 3 } });
+    expect(canStep(grid, { x: 1, y: 0 }, Dir.SE, 2)).toEqual({ ok: false });
+  });
+
+  it('finds path around obstacle and merges run steps', () => {
+    const start = { x: 0, y: 0 };
+    const goal = { x: 4, y: 0 };
+    const path = findPath(grid, start, goal);
+    expect(path.length).toBeGreaterThan(0);
+    expect(path.at(-1)).toEqual(goal);
+    for (const c of path) {
+      expect(isCellWalkable(grid, c.x, c.y)).toBe(true);
+    }
+
+    const walkSteps = pathToSteps(start, path, false);
+    expect(walkSteps.every((s) => s.steps === 1)).toBe(true);
+
+    const straight = findPath(grid, { x: 0, y: 3 }, { x: 4, y: 3 });
+    expect(straight).toEqual([
+      { x: 1, y: 3 },
+      { x: 2, y: 3 },
+      { x: 3, y: 3 },
+      { x: 4, y: 3 },
+    ]);
+    const runSteps = pathToSteps({ x: 0, y: 3 }, straight, true);
+    expect(runSteps).toEqual([
+      { dir: Dir.SE, steps: 2, to: { x: 2, y: 3 } },
+      { dir: Dir.SE, steps: 2, to: { x: 4, y: 3 } },
+    ]);
+  });
+
+  it('returns empty path when goal is blocked or unreachable', () => {
+    expect(findPath(grid, { x: 0, y: 0 }, { x: 2, y: 0 })).toEqual([]);
+    const closed = [
+      [0, 1, 0],
+      [1, 1, 1],
+      [0, 1, 0],
+    ];
+    expect(findPath(closed, { x: 0, y: 0 }, { x: 2, y: 2 })).toEqual([]);
   });
 });

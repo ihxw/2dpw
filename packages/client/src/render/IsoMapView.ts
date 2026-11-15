@@ -1,14 +1,28 @@
 import Phaser from 'phaser';
-import { TILE_H, TILE_W, cellToScreen, type MapDef, type TilesetDef } from '@2dpw/shared';
+import {
+  TILE_H,
+  TILE_W,
+  cellToScreen,
+  isCellWalkable,
+  type MapDef,
+  type MapLayer,
+  type TilesetDef,
+} from '@2dpw/shared';
 import { getTileTextureKey } from './FlareAssetLoader.ts';
 
+interface TileNode {
+  img: Phaser.GameObjects.Image;
+  sx: number;
+  sy: number;
+}
+
 /**
- * Renders an isometric Flare {@link MapDef} with per-row object depth sorting
- * and an optional collision / portal debug overlay.
+ * Renders an isometric Flare {@link MapDef} with per-row object depth sorting,
+ * camera-view culling, and an optional collision / portal debug overlay.
  */
 export class IsoMapView {
   readonly map: MapDef;
-  private tileImages: Phaser.GameObjects.Image[] = [];
+  private tiles: TileNode[] = [];
   private debugGfx: Phaser.GameObjects.Graphics;
 
   constructor(
@@ -18,7 +32,8 @@ export class IsoMapView {
     debugVisible = false,
   ) {
     this.map = map;
-    this.buildTiles(tileset);
+    this.buildLayerGroup(map.groundLayers, tileset, (x, y, idx) => -100000 + (x + y) * 10 + idx);
+    this.buildLayerGroup(map.objectLayers, tileset, (_x, _y, idx, sy) => sy + idx * 0.01);
     this.debugGfx = scene.add.graphics().setDepth(999999);
     this.drawDebugOverlay();
     this.debugGfx.setVisible(debugVisible);
@@ -26,8 +41,21 @@ export class IsoMapView {
 
   /** Check whether cell `(x, y)` is inside bounds and walkable (`collision === 0`). */
   isWalkable(x: number, y: number): boolean {
-    if (x < 0 || y < 0 || x >= this.map.width || y >= this.map.height) return false;
-    return (this.map.collision[y]?.[x] ?? 1) === 0;
+    return isCellWalkable(this.map.collision, x, y);
+  }
+
+  /** Hide tiles outside `cam.worldView` expanded by `pad` pixels (handles tall trees). */
+  cullToCamera(cam: Phaser.Cameras.Scene2D.Camera, pad = 384): void {
+    const view = cam.worldView;
+    const minX = view.left - pad;
+    const maxX = view.right + pad;
+    const minY = view.top - pad;
+    const maxY = view.bottom + pad;
+
+    for (const node of this.tiles) {
+      const vis = node.sx >= minX && node.sx <= maxX && node.sy >= minY && node.sy <= maxY;
+      if (node.img.visible !== vis) node.img.setVisible(vis);
+    }
   }
 
   /** Show or hide the collision and portal grid overlay. */
@@ -37,13 +65,17 @@ export class IsoMapView {
 
   /** Destroy all tile game objects and debug graphics. */
   destroy(): void {
-    for (const img of this.tileImages) img.destroy();
-    this.tileImages = [];
+    for (const node of this.tiles) node.img.destroy();
+    this.tiles = [];
     this.debugGfx.destroy();
   }
 
-  private buildTiles(tileset: TilesetDef): void {
-    this.map.groundLayers.forEach((layer, layerIdx) => {
+  private buildLayerGroup(
+    layers: MapLayer[],
+    tileset: TilesetDef,
+    depthFor: (x: number, y: number, layerIdx: number, sy: number) => number,
+  ): void {
+    layers.forEach((layer, layerIdx) => {
       for (let y = 0; y < layer.data.length; y++) {
         const row = layer.data[y]!;
         for (let x = 0; x < row.length; x++) {
@@ -56,27 +88,8 @@ export class IsoMapView {
           const img = this.scene.add
             .image(sx, sy, getTileTextureKey(tileset, tile), `tile:${tile.id}`)
             .setOrigin(tile.ox / tile.w, tile.oy / tile.h)
-            .setDepth(-100000 + (x + y) * 10 + layerIdx);
-          this.tileImages.push(img);
-        }
-      }
-    });
-
-    this.map.objectLayers.forEach((layer, layerIdx) => {
-      for (let y = 0; y < layer.data.length; y++) {
-        const row = layer.data[y]!;
-        for (let x = 0; x < row.length; x++) {
-          const tileId = row[x] ?? 0;
-          if (tileId <= 0) continue;
-          const tile = tileset.tiles[tileId];
-          if (!tile || tile.w <= 0 || tile.h <= 0) continue;
-
-          const { x: sx, y: sy } = cellToScreen(x, y);
-          const img = this.scene.add
-            .image(sx, sy, getTileTextureKey(tileset, tile), `tile:${tile.id}`)
-            .setOrigin(tile.ox / tile.w, tile.oy / tile.h)
-            .setDepth(sy + layerIdx * 0.01);
-          this.tileImages.push(img);
+            .setDepth(depthFor(x, y, layerIdx, sy));
+          this.tiles.push({ img, sx, sy });
         }
       }
     });

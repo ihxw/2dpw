@@ -332,6 +332,20 @@ export function parseFlareMapTxt(id: string, txt: string): MapDef {
 
   flushSection();
 
+  for (const p of portals) {
+    if (id === 'perdition_harbor' && p.targetMap === 'perdition_harbor_cave') {
+      p.targetMap = 'goblin_cave';
+      p.targetX = 18;
+      p.targetY = 46;
+      p.tooltip = '19级副本·地精洞穴';
+    } else if (id === 'goblin_cave' && p.targetMap === 'goblin_camp') {
+      p.targetMap = 'perdition_harbor';
+      p.targetX = 5;
+      p.targetY = 14;
+      p.tooltip = '祖龙港口';
+    }
+  }
+
   return {
     id,
     title,

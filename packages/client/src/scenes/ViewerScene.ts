@@ -69,6 +69,7 @@ export class ViewerScene extends Phaser.Scene {
   private presetSelect!: HTMLSelectElement;
   private animSelect!: HTMLSelectElement;
   private dirSelect!: HTMLSelectElement;
+  private returnScene = 'Boot';
 
   private keys!: {
     w: Phaser.Input.Keyboard.Key;
@@ -83,6 +84,10 @@ export class ViewerScene extends Phaser.Scene {
 
   constructor() {
     super('Viewer');
+  }
+
+  init(data?: { returnScene?: string }): void {
+    this.returnScene = data?.returnScene ?? 'Boot';
   }
 
   create(): void {
@@ -126,6 +131,7 @@ export class ViewerScene extends Phaser.Scene {
 
   override update(_time: number, delta: number): void {
     if (!this.mapView) return;
+    this.mapView.cullToCamera(this.cameras.main);
 
     if (this.autoRotate) {
       this.rotateTimerMs += delta;
@@ -478,7 +484,7 @@ export class ViewerScene extends Phaser.Scene {
     root.appendChild(hint);
 
     const backBtn = document.createElement('button');
-    backBtn.textContent = '返回启动页';
+    backBtn.textContent = this.returnScene === 'World' ? '返回游戏世界' : '返回启动页';
     Object.assign(backBtn.style, {
       background: '#272b3b',
       color: '#d1d5db',
@@ -488,7 +494,7 @@ export class ViewerScene extends Phaser.Scene {
       cursor: 'pointer',
       fontSize: '12px',
     });
-    backBtn.onclick = () => this.scene.start('Boot');
+    backBtn.onclick = () => this.scene.start(this.returnScene);
     root.appendChild(backBtn);
 
     document.body.appendChild(root);

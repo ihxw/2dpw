@@ -114,6 +114,7 @@ function main(): void {
   for (const entry of Object.values(DEFAULT_MANIFEST.maps)) {
     const srcPath = path.join(EMPYREAN, `maps/${entry.file}.txt`);
     const map = parseFlareMapTxt(entry.file, fs.readFileSync(srcPath, 'utf-8'));
+    map.portals = map.portals.filter((p) => p.targetMap in DEFAULT_MANIFEST.maps);
     writeJson(`maps/${entry.file}.json`, map);
     count++;
   }

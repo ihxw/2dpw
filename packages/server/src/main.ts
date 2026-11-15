@@ -11,6 +11,7 @@ import {
   type C2S,
   type S2C,
 } from '@2dpw/shared';
+import { World } from './world/World.ts';
 
 const port = Number(process.env.PORT ?? SERVER_PORT);
 
@@ -21,6 +22,7 @@ interface Session {
 }
 
 const sessions = new Map<string, Session>();
+const world = new World();
 
 function send(s: Session, msg: S2C): void {
   if (s.ws.readyState === s.ws.OPEN) s.ws.send(encode(msg));
@@ -40,13 +42,25 @@ function handle(s: Session, msg: C2S): void {
     case 'ping':
       send(s, { t: 'pong', at: msg.at, serverTime: Date.now() });
       return;
+    case 'join':
+      world.join(s.id, msg, (out) => send(s, out));
+      return;
+    case 'move':
+      world.move(s.id, msg);
+      return;
+    case 'setPreset':
+      world.setPreset(s.id, msg.presetId);
+      return;
+    case 'teleport':
+      world.teleport(s.id, msg.mapId);
+      return;
   }
 }
 
 const http = createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, sessions: sessions.size }));
+    res.end(JSON.stringify({ ok: true, sessions: sessions.size, players: world.size }));
     return;
   }
   res.writeHead(404).end();
@@ -67,12 +81,13 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
+    world.leave(s.id);
     sessions.delete(s.id);
     console.log(`[net] - ${s.id} (${sessions.size} online)`);
   });
 });
 
-// World tick loop (empty for now; systems are added in M1+).
+// World tick loop (combat/AI systems will be added in M3).
 let tick = 0;
 setInterval(() => {
   tick++;
