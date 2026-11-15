@@ -2,13 +2,16 @@ import Phaser from 'phaser';
 import {
   Dir,
   HERO_LAYER_ORDER,
+  getHeadStylesForBase,
+  resolveHairTint,
   stepAnimFrame,
   type AnimFrame,
   type AnimSection,
   type AnimSetDef,
+  type AppearanceManifest,
   type EquipLayer,
 } from '@2dpw/shared';
-import { getAnimFrameTextureKey } from './FlareAssetLoader.ts';
+import { ensureAnimSetLoaded, getAnimFrameTextureKey } from './FlareAssetLoader.ts';
 
 const frameLookupCache = new WeakMap<AnimSection, Map<string, AnimFrame>>();
 
@@ -177,6 +180,17 @@ export class PaperDoll {
     this.renderCurrentFrame();
   }
 
+  /** Tint an equipment slot (e.g. hair/head color); `0xffffff` clears tinting. */
+  setSlotTint(slot: EquipLayer, tint = 0xffffff): void {
+    const img = this.slotImages.get(slot);
+    if (!img) return;
+    if (tint === 0xffffff) {
+      img.clearTint();
+    } else {
+      img.setTint(tint);
+    }
+  }
+
   /** Clean up underlying Phaser container and sprites. */
   destroy(): void {
     this.container.destroy(true);
@@ -239,4 +253,47 @@ export class PaperDoll {
       this.onOnceDone?.();
     }
   }
+}
+
+const dollLoadSeq = new WeakMap<PaperDoll, number>();
+
+/**
+ * Load all equipment layer animations for `presetId` (with optional `headStyle`
+ * override and `hairColor` tint) onto `doll`, discarding stale async completions.
+ */
+export async function loadPresetToDoll(
+  scene: Phaser.Scene,
+  manifest: AppearanceManifest,
+  doll: PaperDoll,
+  presetId: string,
+  headStyle?: string,
+  hairColor?: string,
+): Promise<void> {
+  const preset = manifest.classes[presetId];
+  if (!preset) return;
+
+  const seq = (dollLoadSeq.get(doll) ?? 0) + 1;
+  dollLoadSeq.set(doll, seq);
+
+  const layerFiles: Partial<Record<EquipLayer, string>> = { ...preset.layers };
+  if (headStyle && getHeadStylesForBase(preset.base).some((h) => h.id === headStyle)) {
+    layerFiles.head = headStyle;
+  }
+
+  const entries = Object.entries(layerFiles) as [EquipLayer, string][];
+  const loaded = await Promise.all(
+    entries.map(async ([slot, file]) => {
+      const def = await ensureAnimSetLoaded(scene, `avatar/${preset.base}/${file}`);
+      return [slot, def] as const;
+    }),
+  );
+
+  if (dollLoadSeq.get(doll) !== seq || !doll.container.scene || !scene.sys.isActive()) {
+    return;
+  }
+
+  const layers: Partial<Record<EquipLayer, AnimSetDef>> = {};
+  for (const [slot, def] of loaded) layers[slot] = def;
+  doll.setLayers(layers);
+  doll.setSlotTint('head', resolveHairTint(hairColor));
 }

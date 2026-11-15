@@ -13,6 +13,7 @@ import {
   type C2S,
   type S2C,
 } from '@2dpw/shared';
+import { Store, type AuthResult } from './db/Store.ts';
 import { World } from './world/World.ts';
 
 const port = Number(process.env.PORT ?? SERVER_PORT);
@@ -113,13 +114,28 @@ interface Session {
   id: string;
   ws: WebSocket;
   greeted: boolean;
+  accountId?: string;
+  username?: string;
+  token?: string;
 }
 
 const sessions = new Map<string, Session>();
-const world = new World();
+const store = new Store();
+const world = new World(undefined, store);
 
 function send(s: Session, msg: S2C): void {
   if (s.ws.readyState === s.ws.OPEN) s.ws.send(encode(msg));
+}
+
+function applyAuthResult(s: Session, res: AuthResult): void {
+  if (!res.ok) {
+    send(s, { t: 'authError', message: res.message });
+    return;
+  }
+  s.accountId = res.accountId;
+  s.username = res.username;
+  s.token = res.token;
+  send(s, { t: 'authOk', username: res.username, token: res.token, characters: res.characters });
 }
 
 function handle(s: Session, msg: C2S): void {
@@ -135,6 +151,75 @@ function handle(s: Session, msg: C2S): void {
       return;
     case 'ping':
       send(s, { t: 'pong', at: msg.at, serverTime: Date.now() });
+      return;
+    case 'register':
+      applyAuthResult(s, store.register(msg.username, msg.password));
+      return;
+    case 'login':
+      applyAuthResult(s, store.login(msg.username, msg.password));
+      return;
+    case 'resume': {
+      world.leave(s.id);
+      const verified = store.verifyToken(msg.token);
+      if (!verified) {
+        send(s, { t: 'authError', message: '登录会话已失效，请重新登录' });
+        return;
+      }
+      s.accountId = verified.accountId;
+      s.username = verified.username;
+      s.token = msg.token;
+      send(s, {
+        t: 'authOk',
+        username: verified.username,
+        token: msg.token,
+        characters: store.listCharacters(verified.accountId),
+      });
+      return;
+    }
+    case 'logout':
+      world.leave(s.id);
+      if (s.token) store.revokeToken(s.token);
+      s.accountId = undefined;
+      s.username = undefined;
+      s.token = undefined;
+      return;
+    case 'createCharacter': {
+      if (!s.accountId) {
+        send(s, { t: 'authError', message: '请先登录账号' });
+        return;
+      }
+      const created = store.createCharacter(s.accountId, msg, world.getDefaultSpawn());
+      if (!created.ok) {
+        send(s, { t: 'authError', message: created.message });
+        return;
+      }
+      send(s, { t: 'characterList', characters: store.listCharacters(s.accountId) });
+      return;
+    }
+    case 'deleteCharacter': {
+      if (!s.accountId) {
+        send(s, { t: 'authError', message: '请先登录账号' });
+        return;
+      }
+      store.deleteCharacter(s.accountId, msg.charId);
+      send(s, { t: 'characterList', characters: store.listCharacters(s.accountId) });
+      return;
+    }
+    case 'enterWorld': {
+      if (!s.accountId) {
+        send(s, { t: 'authError', message: '请先登录账号' });
+        return;
+      }
+      const char = store.getCharacter(msg.charId, s.accountId);
+      if (!char) {
+        send(s, { t: 'authError', message: '未找到指定角色' });
+        return;
+      }
+      world.joinCharacter(s.id, char, (out) => send(s, out));
+      return;
+    }
+    case 'useBagItem':
+      world.useBagItem(s.id, msg.slot);
       return;
     case 'join':
       world.join(s.id, msg, (out) => send(s, out));
@@ -176,9 +261,30 @@ wss.on('connection', (ws) => {
 
 // World tick loop (combat/AI systems will be added in M3).
 let tick = 0;
-setInterval(() => {
+const tickInterval = setInterval(() => {
   tick++;
 }, 1000 / TICK_RATE);
+
+const saveInterval = setInterval(() => {
+  const count = world.flushDirtySaves();
+  if (count > 0) console.log(`[save] flushed ${count} character(s)`);
+}, 5000);
+
+let closing = false;
+function shutdown(): void {
+  if (closing) return;
+  closing = true;
+  clearInterval(tickInterval);
+  clearInterval(saveInterval);
+  world.flushDirtySaves();
+  store.close();
+  wss.close();
+  http.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 1000).unref();
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
 
 http.listen(port, host, () => {
   console.log(`[server] listening on http://${host}:${port}${WS_PATH} @ ${TICK_RATE}Hz`);

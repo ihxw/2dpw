@@ -6,11 +6,14 @@ import {
   Dir,
   canStep,
   cellDistance,
+  getHeadStylesForBase,
   isCellWalkable,
+  type CharacterSummary,
   type MapDef,
   type PlayerSummary,
   type S2C,
 } from '@2dpw/shared';
+import type { Store } from '../db/Store.ts';
 
 /** Maximum Chebyshev distance (in cells) for two players on the same map to see each other. */
 export const AOI_RADIUS_CELLS = 24;
@@ -28,6 +31,8 @@ export interface PlayerState {
   dir: Dir;
   lastStepAt: number;
   send: (msg: S2C) => void;
+  char?: CharacterSummary;
+  dirty?: boolean;
 }
 
 /** Load all converted map JSON files listed in {@link DEFAULT_MANIFEST.maps}. */
@@ -46,8 +51,19 @@ export function loadGeneratedMaps(
 function toSummary(p: PlayerState): PlayerSummary {
   return {
     id: p.id,
+    charId: p.char?.id,
     name: p.name,
     presetId: p.presetId,
+    headStyle: p.char?.headStyle,
+    hairColor: p.char?.hairColor,
+    level: p.char?.level,
+    exp: p.char?.exp,
+    hp: p.char?.hp,
+    maxHp: p.char?.maxHp,
+    mp: p.char?.mp,
+    maxMp: p.char?.maxMp,
+    gold: p.char?.gold,
+    bag: p.char?.bag,
     mapId: p.mapId,
     x: p.x,
     y: p.y,
@@ -57,28 +73,41 @@ function toSummary(p: PlayerState): PlayerSummary {
 
 /**
  * Authoritative multiplayer world manager handling map collision,
- * Mir-style step rate-limiting, Chebyshev AOI visibility, and portals.
+ * Mir-style step rate-limiting, Chebyshev AOI visibility, portals,
+ * and SQLite character persistence.
  */
 export class World {
   private readonly players = new Map<string, PlayerState>();
 
-  constructor(private readonly maps: Map<string, MapDef> = loadGeneratedMaps()) {}
+  constructor(
+    private readonly maps: Map<string, MapDef> = loadGeneratedMaps(),
+    private readonly store?: Store,
+  ) {}
 
   /** Number of currently joined players. */
   get size(): number {
     return this.players.size;
   }
 
-  /** Place a connected session into a map and sync initial AOI peers. */
+  /** Return the default starting map and walkable spawn cell. */
+  getDefaultSpawn(): { mapId: string; x: number; y: number } {
+    const fallbackMapId = this.maps.has('arrival')
+      ? 'arrival'
+      : (this.maps.keys().next().value ?? '');
+    const map = this.maps.get(fallbackMapId);
+    return map
+      ? { mapId: map.id, x: map.spawn.x, y: map.spawn.y }
+      : { mapId: 'arrival', x: 20, y: 20 };
+  }
+
+  /** Place a guest connected session into a map and sync initial AOI peers. */
   join(
     playerId: string,
     opts: { name?: string; presetId?: string; mapId?: string },
     send: (msg: S2C) => void,
   ): PlayerState | null {
-    const fallbackMapId = this.maps.has('arrival')
-      ? 'arrival'
-      : (this.maps.keys().next().value ?? '');
-    const mapId = opts.mapId && this.maps.has(opts.mapId) ? opts.mapId : fallbackMapId;
+    const defSpawn = this.getDefaultSpawn();
+    const mapId = opts.mapId && this.maps.has(opts.mapId) ? opts.mapId : defSpawn.mapId;
     const map = this.maps.get(mapId);
     if (!map) return null;
 
@@ -103,8 +132,63 @@ export class World {
       lastStepAt: 0,
       send,
     };
-    this.players.set(playerId, player);
+    return this.enterWorldState(player);
+  }
 
+  /** Place a persistent character into its saved map and coordinates. */
+  joinCharacter(
+    playerId: string,
+    char: CharacterSummary,
+    send: (msg: S2C) => void,
+  ): PlayerState | null {
+    for (const other of [...this.players.values()]) {
+      if (other.char?.id === char.id && other.id !== playerId) {
+        this.leave(other.id);
+      }
+    }
+    if (this.players.has(playerId)) {
+      this.leave(playerId);
+    }
+
+    const defSpawn = this.getDefaultSpawn();
+    const mapId = this.maps.has(char.mapId) ? char.mapId : defSpawn.mapId;
+    const map = this.maps.get(mapId);
+    if (!map) return null;
+
+    const walkable = isCellWalkable(map.collision, char.x, char.y);
+    const x = walkable ? char.x : map.spawn.x;
+    const y = walkable ? char.y : map.spawn.y;
+    const dir = char.dir in DIR_DELTA ? char.dir : Dir.S;
+    const presetId = char.presetId in DEFAULT_MANIFEST.classes ? char.presetId : 'blademaster.male';
+
+    const clonedChar: CharacterSummary = {
+      ...char,
+      presetId,
+      mapId,
+      x,
+      y,
+      dir,
+      bag: char.bag.map((item) => ({ ...item })),
+    };
+
+    const player: PlayerState = {
+      id: playerId,
+      name: clonedChar.name,
+      presetId,
+      mapId,
+      x,
+      y,
+      dir,
+      lastStepAt: 0,
+      send,
+      char: clonedChar,
+      dirty: false,
+    };
+    return this.enterWorldState(player);
+  }
+
+  private enterWorldState(player: PlayerState): PlayerState {
+    this.players.set(player.id, player);
     const peers = this.getAoiPeers(player);
     for (const peer of peers) {
       peer.send({ t: 'peerEnter', peer: toSummary(player) });
@@ -113,11 +197,12 @@ export class World {
     return player;
   }
 
-  /** Remove a player and notify any visible peers. */
+  /** Save if dirty, remove a player, and notify any visible peers. */
   leave(playerId: string): void {
     const p = this.players.get(playerId);
     if (!p) return;
 
+    this.savePlayer(p);
     const peers = this.getAoiPeers(p);
     this.players.delete(playerId);
     for (const peer of peers) {
@@ -157,6 +242,12 @@ export class World {
     p.y = check.to.y;
     p.dir = msg.dir;
     p.lastStepAt = now;
+    if (p.char) {
+      p.char.x = p.x;
+      p.char.y = p.y;
+      p.char.dir = p.dir;
+      p.dirty = true;
+    }
 
     const newPeers = this.getAoiPeers(p);
     const newPeerIds = new Set(newPeers.map((o) => o.id));
@@ -207,8 +298,17 @@ export class World {
   /** Update a player's class preset and notify AOI peers. */
   setPreset(playerId: string, presetId: string): void {
     const p = this.players.get(playerId);
-    if (!p || !(presetId in DEFAULT_MANIFEST.classes)) return;
+    const preset = DEFAULT_MANIFEST.classes[presetId];
+    if (!p || !preset) return;
     p.presetId = presetId;
+    if (p.char) {
+      p.char.presetId = presetId;
+      const validHeads = getHeadStylesForBase(preset.base);
+      if (!validHeads.some((h) => h.id === p.char!.headStyle)) {
+        p.char.headStyle = preset.layers.head ?? validHeads[0]?.id ?? 'leather_hood';
+      }
+      this.savePlayer(p);
+    }
     p.send({ t: 'peerPreset', id: p.id, presetId });
     for (const peer of this.getAoiPeers(p)) {
       peer.send({ t: 'peerPreset', id: p.id, presetId });
@@ -221,6 +321,79 @@ export class World {
     const target = this.maps.get(mapId);
     if (!p || !target) return;
     this.transferMap(p, target.id, target.spawn.x, target.spawn.y);
+  }
+
+  /** Consume one item from the player's bag, update stats/level, and save immediately. */
+  useBagItem(playerId: string, slot: number): void {
+    const p = this.players.get(playerId);
+    if (!p?.char) return;
+
+    const idx = p.char.bag.findIndex((item) => item.slot === slot);
+    if (idx < 0) return;
+    const item = p.char.bag[idx]!;
+
+    switch (item.itemId) {
+      case 'potion_hp_s':
+        p.char.hp = Math.min(p.char.maxHp, p.char.hp + 50);
+        break;
+      case 'potion_mp_s':
+        p.char.mp = Math.min(p.char.maxMp, p.char.mp + 50);
+        break;
+      case 'scroll_exp':
+        p.char.level += 1;
+        p.char.exp += 100;
+        p.char.maxHp += 25;
+        p.char.maxMp += 15;
+        p.char.hp = p.char.maxHp;
+        p.char.mp = p.char.maxMp;
+        break;
+      case 'coin_pouch':
+        p.char.gold += 200;
+        break;
+      default:
+        return;
+    }
+
+    item.count -= 1;
+    if (item.count <= 0) {
+      p.char.bag.splice(idx, 1);
+    }
+
+    this.savePlayer(p);
+    p.send({
+      t: 'charStats',
+      level: p.char.level,
+      exp: p.char.exp,
+      hp: p.char.hp,
+      maxHp: p.char.maxHp,
+      mp: p.char.mp,
+      maxMp: p.char.maxMp,
+      gold: p.char.gold,
+      bag: p.char.bag,
+    });
+  }
+
+  /** Flush all dirty online character snapshots to SQLite. */
+  flushDirtySaves(): number {
+    let saved = 0;
+    for (const p of this.players.values()) {
+      if (p.char && p.dirty) {
+        this.savePlayer(p);
+        saved++;
+      }
+    }
+    return saved;
+  }
+
+  private savePlayer(p: PlayerState): void {
+    if (!p.char || !this.store) return;
+    p.char.mapId = p.mapId;
+    p.char.x = p.x;
+    p.char.y = p.y;
+    p.char.dir = p.dir;
+    p.char.presetId = p.presetId;
+    this.store.saveCharacterState(p.char);
+    p.dirty = false;
   }
 
   private transferMap(p: PlayerState, targetMapId: string, targetX: number, targetY: number): void {
@@ -237,6 +410,13 @@ export class World {
     p.x = validDest ? targetX : targetMap.spawn.x;
     p.y = validDest ? targetY : targetMap.spawn.y;
     p.lastStepAt = 0;
+    if (p.char) {
+      p.char.mapId = p.mapId;
+      p.char.x = p.x;
+      p.char.y = p.y;
+      p.char.dir = p.dir;
+      this.savePlayer(p);
+    }
 
     const newPeers = this.getAoiPeers(p);
     for (const peer of newPeers) {

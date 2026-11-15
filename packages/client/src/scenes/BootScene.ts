@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
-import { CLASSES, RACE_NAMES, type S2C } from '@2dpw/shared';
-import { Connection, type ConnState } from '../net/Connection.ts';
-import type { NetBridge } from './WorldScene.ts';
+import { CLASSES, RACE_NAMES } from '@2dpw/shared';
+import type { ConnState } from '../net/Connection.ts';
+import { acquireNetBridge, type NetBridge } from './WorldScene.ts';
 
 const STATE_TEXT: Record<ConnState, string> = {
   connecting: '正在连接服务器…',
@@ -21,8 +21,12 @@ export class BootScene extends Phaser.Scene {
 
   create(): void {
     const sceneParam = new URLSearchParams(location.search).get('scene');
-    if (sceneParam === 'viewer') {
-      this.scene.start('Viewer');
+    if (sceneParam === 'world') {
+      this.scene.start('World');
+      return;
+    }
+    if (sceneParam === 'lobby') {
+      this.scene.start('Lobby');
       return;
     }
 
@@ -61,35 +65,22 @@ export class BootScene extends Phaser.Scene {
       return btn;
     };
 
-    makeBtn(height / 2 + 95, '[ 进入游戏世界 (M1) ]', () => {
+    makeBtn(height / 2 + 95, '[ 进入登录与选角大厅 (M2) ]', () => {
+      window.clearTimeout(this.enterTimer);
+      this.scene.start('Lobby');
+    });
+
+    makeBtn(height / 2 + 145, '[ 游客快速进图 (M1) ]', () => {
       window.clearTimeout(this.enterTimer);
       this.scene.start('World');
     });
 
-    makeBtn(height / 2 + 145, '[ 进入 M0.5 素材与地图预览器 ]', () => {
+    makeBtn(height / 2 + 195, '[ 进入 M0.5 素材与地图预览器 ]', () => {
       window.clearTimeout(this.enterTimer);
       this.scene.start('Viewer');
     });
 
-    let bridge = this.game.registry.get('netBridge') as NetBridge | undefined;
-    if (!bridge) {
-      let onState: (s: ConnState) => void = () => {};
-      let onMsg: (m: S2C) => void = () => {};
-      const conn = new Connection(
-        (s) => onState(s),
-        (m) => onMsg(m),
-      );
-      bridge = {
-        conn,
-        setHandlers: (sCb, mCb) => {
-          onState = sCb;
-          onMsg = mCb;
-        },
-      };
-      this.game.registry.set('netBridge', bridge);
-      conn.connect();
-    }
-    this.bridge = bridge;
+    this.bridge = acquireNetBridge(this.game);
 
     const applyState = (s: ConnState): void => {
       if (!this.sys.isActive()) return;
@@ -97,7 +88,7 @@ export class BootScene extends Phaser.Scene {
       this.status.setColor(s === 'connected' ? '#7f7' : s === 'connecting' ? '#ccc' : '#f77');
       if (s === 'connected' && sceneParam !== 'boot' && this.enterTimer === undefined) {
         this.enterTimer = window.setTimeout(() => {
-          if (this.sys.isActive()) this.scene.start('World');
+          if (this.sys.isActive()) this.scene.start('Lobby');
         }, 400);
       }
     };

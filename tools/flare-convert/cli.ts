@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { DEFAULT_MANIFEST, type AvatarBase } from '@2dpw/shared';
+import { DEFAULT_MANIFEST, HEAD_STYLES, type AvatarBase } from '@2dpw/shared';
 import { parseFlareAnimTxt, parseFlareMapTxt, parseFlareTilesetTxt } from './convert.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
@@ -39,12 +39,15 @@ function main(): void {
 
   let count = 0;
 
-  // 1. Collect all avatar equipment layer basenames from DEFAULT_MANIFEST
+  // 1. Collect all avatar equipment layer basenames from DEFAULT_MANIFEST + HEAD_STYLES
   const avatarFiles = new Set<string>();
   for (const preset of Object.values(DEFAULT_MANIFEST.classes)) {
     for (const file of Object.values(preset.layers)) {
       if (file) avatarFiles.add(file);
     }
+  }
+  for (const head of HEAD_STYLES) {
+    avatarFiles.add(head.id);
   }
 
   // Verify every class preset's exact layers exist

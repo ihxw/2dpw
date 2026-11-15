@@ -9,28 +9,64 @@ import {
   canStep,
   cellToScreen,
   findPath,
+  getHeadStylesForBase,
   pathToSteps,
   screenToCell,
-  type AnimSetDef,
   type AppearanceManifest,
   type Cell,
-  type EquipLayer,
+  type InventoryItem,
   type MoveStep,
   type PlayerSummary,
   type S2C,
 } from '@2dpw/shared';
 import { Connection, type ConnState } from '../net/Connection.ts';
-import {
-  ensureAnimSetLoaded,
-  ensureMapAndTilesetLoaded,
-  loadJson,
-} from '../render/FlareAssetLoader.ts';
+import { ensureMapAndTilesetLoaded, loadJson } from '../render/FlareAssetLoader.ts';
 import { IsoMapView } from '../render/IsoMapView.ts';
-import { PaperDoll } from '../render/PaperDoll.ts';
+import { PaperDoll, loadPresetToDoll } from '../render/PaperDoll.ts';
+import { SESSION_TOKEN_KEY } from './LobbyScene.ts';
 
 export interface NetBridge {
   conn: Connection;
   setHandlers: (onState: (s: ConnState) => void, onMessage: (m: S2C) => void) => void;
+}
+
+export interface WorldSceneInitData {
+  initialJoined?: { self: PlayerSummary; peers: PlayerSummary[] };
+  activeCharId?: string;
+}
+
+/** Lazily create and share a single {@link NetBridge} across scenes on `game.registry`. */
+export function acquireNetBridge(game: Phaser.Game): NetBridge {
+  let bridge = game.registry.get('netBridge') as NetBridge | undefined;
+  if (!bridge) {
+    let onState: (s: ConnState) => void = () => {};
+    let onMsg: (m: S2C) => void = () => {};
+    const conn = new Connection(
+      (s) => onState(s),
+      (m) => onMsg(m),
+    );
+    bridge = {
+      conn,
+      setHandlers: (sCb, mCb) => {
+        onState = sCb;
+        onMsg = mCb;
+      },
+    };
+    game.registry.set('netBridge', bridge);
+    conn.connect();
+  }
+  return bridge;
+}
+
+interface CharStatsState {
+  level: number;
+  exp: number;
+  hp: number;
+  maxHp: number;
+  mp: number;
+  maxMp: number;
+  gold: number;
+  bag: InventoryItem[];
 }
 
 interface RemotePeer {
@@ -60,7 +96,14 @@ export class WorldScene extends Phaser.Scene {
   private targetGfx!: Phaser.GameObjects.Graphics;
 
   private selfId = '';
+  private selfName = '我';
+  private activeCharId = '';
   private presetId = 'blademaster.male';
+  private selfHeadStyle?: string;
+  private selfHairColor?: string;
+  private charStats: CharStatsState | null = null;
+  private initialJoined?: { self: PlayerSummary; peers: PlayerSummary[] };
+  private pendingResumeAuth = false;
   private currentMapId = '';
   private actor!: PaperDoll;
   private selfLabel!: Phaser.GameObjects.Text;
@@ -80,6 +123,8 @@ export class WorldScene extends Phaser.Scene {
 
   private uiEl: HTMLDivElement | null = null;
   private statusEl: HTMLDivElement | null = null;
+  private statsEl: HTMLDivElement | null = null;
+  private bagListEl: HTMLDivElement | null = null;
   private presetSelect!: HTMLSelectElement;
   private mapSelect!: HTMLSelectElement;
 
@@ -97,6 +142,22 @@ export class WorldScene extends Phaser.Scene {
 
   constructor() {
     super('World');
+  }
+
+  init(data?: WorldSceneInitData): void {
+    this.initialJoined = data?.initialJoined;
+    this.activeCharId = data?.activeCharId ?? data?.initialJoined?.self.charId ?? '';
+    this.pendingResumeAuth = false;
+    this.selfId = '';
+    this.selfName = '我';
+    this.selfHeadStyle = undefined;
+    this.selfHairColor = undefined;
+    this.charStats = null;
+    this.currentMapId = '';
+    this.stepFrom = null;
+    this.stepTo = null;
+    this.stepElapsedMs = 0;
+    this.pendingPath = [];
   }
 
   create(): void {
@@ -232,47 +293,79 @@ export class WorldScene extends Phaser.Scene {
     );
     this.populateSelects();
 
-    let bridge = this.game.registry.get('netBridge') as NetBridge | undefined;
-    if (!bridge) {
-      let onState: (s: ConnState) => void = () => {};
-      let onMsg: (m: S2C) => void = () => {};
-      const conn = new Connection(
-        (s) => onState(s),
-        (m) => onMsg(m),
-      );
-      bridge = {
-        conn,
-        setHandlers: (sCb, mCb) => {
-          onState = sCb;
-          onMsg = mCb;
-        },
-      };
-      this.game.registry.set('netBridge', bridge);
-      conn.connect();
-    }
-    this.bridge = bridge;
-
+    this.bridge = acquireNetBridge(this.game);
     this.bridge.setHandlers(
       (state) => {
-        if (state === 'connected') {
-          this.bridge.conn.send({ t: 'join', presetId: this.presetId });
+        if (state === 'connected' && !this.initialJoined && !this.selfId) {
+          this.rejoinOrEnter();
         }
         this.updateStatus();
       },
       (msg) => this.handleServerMessage(msg),
     );
 
-    if (this.bridge.conn.state === 'connected') {
-      this.bridge.conn.send({ t: 'join', presetId: this.presetId });
+    if (this.initialJoined) {
+      const initData = this.initialJoined;
+      this.initialJoined = undefined;
+      await this.applyJoined(initData.self, initData.peers);
+      return;
     }
+
+    if (this.bridge.conn.state === 'connected') {
+      this.rejoinOrEnter();
+    }
+  }
+
+  private rejoinOrEnter(): void {
+    if (this.activeCharId) {
+      let token = '';
+      try {
+        token = localStorage.getItem(SESSION_TOKEN_KEY) ?? '';
+      } catch {
+        token = '';
+      }
+      if (token) {
+        this.pendingResumeAuth = true;
+        this.bridge.conn.send({ t: 'resume', token });
+        return;
+      }
+    }
+    this.bridge.conn.send({ t: 'join', presetId: this.presetId });
   }
 
   private handleServerMessage(msg: S2C): void {
     switch (msg.t) {
       case 'welcome':
-        this.bridge.conn.send({ t: 'join', presetId: this.presetId });
+        this.rejoinOrEnter();
+        return;
+      case 'authOk':
+        if (this.pendingResumeAuth && this.activeCharId) {
+          this.pendingResumeAuth = false;
+          this.bridge.conn.send({ t: 'enterWorld', charId: this.activeCharId });
+        }
+        return;
+      case 'authError':
+        if (this.pendingResumeAuth) {
+          this.pendingResumeAuth = false;
+          this.scene.start('Lobby');
+        }
         return;
       case 'pong':
+        this.updateStatus();
+        return;
+      case 'charStats':
+        this.charStats = {
+          level: msg.level,
+          exp: msg.exp,
+          hp: msg.hp,
+          maxHp: msg.maxHp,
+          mp: msg.mp,
+          maxMp: msg.maxMp,
+          gold: msg.gold,
+          bag: msg.bag,
+        };
+        this.renderBagAndStats();
+        this.updateSelfLabel();
         this.updateStatus();
         return;
       case 'joined':
@@ -289,13 +382,35 @@ export class WorldScene extends Phaser.Scene {
         if (msg.id === this.selfId) {
           this.presetId = msg.presetId;
           if (this.presetSelect) this.presetSelect.value = msg.presetId;
-          void this.applyDollPreset(this.actor, msg.presetId);
+          const preset = this.manifest.classes[msg.presetId];
+          if (
+            preset &&
+            this.selfHeadStyle &&
+            !getHeadStylesForBase(preset.base).some((h) => h.id === this.selfHeadStyle)
+          ) {
+            this.selfHeadStyle = preset.layers.head;
+          }
+          void loadPresetToDoll(
+            this,
+            this.manifest,
+            this.actor,
+            msg.presetId,
+            this.selfHeadStyle,
+            this.selfHairColor,
+          );
           this.updateSelfLabel();
         } else {
           const peer = this.peers.get(msg.id);
           if (peer) {
             peer.summary.presetId = msg.presetId;
-            void this.applyDollPreset(peer.doll, msg.presetId);
+            void loadPresetToDoll(
+              this,
+              this.manifest,
+              peer.doll,
+              msg.presetId,
+              peer.summary.headStyle,
+              peer.summary.hairColor,
+            );
             peer.label.setText(this.formatLabel(peer.summary));
           }
         }
@@ -328,7 +443,25 @@ export class WorldScene extends Phaser.Scene {
   private async applyJoined(self: PlayerSummary, peers: PlayerSummary[]): Promise<void> {
     const epoch = ++this.loadEpoch;
     this.selfId = self.id;
+    this.selfName = self.name;
     this.presetId = self.presetId;
+    this.selfHeadStyle = self.headStyle;
+    this.selfHairColor = self.hairColor;
+    if (self.charId) this.activeCharId = self.charId;
+    this.charStats =
+      self.level !== undefined
+        ? {
+            level: self.level,
+            exp: self.exp ?? 0,
+            hp: self.hp ?? 100,
+            maxHp: self.maxHp ?? 100,
+            mp: self.mp ?? 100,
+            maxMp: self.maxMp ?? 100,
+            gold: self.gold ?? 0,
+            bag: self.bag ?? [],
+          }
+        : null;
+    this.renderBagAndStats();
     if (this.presetSelect) this.presetSelect.value = self.presetId;
     if (this.mapSelect) this.mapSelect.value = self.mapId;
 
@@ -375,7 +508,14 @@ export class WorldScene extends Phaser.Scene {
     this.positionSelf(self.x, self.y);
     this.updateSelfLabel();
 
-    await this.applyDollPreset(this.actor, self.presetId);
+    await loadPresetToDoll(
+      this,
+      this.manifest,
+      this.actor,
+      self.presetId,
+      self.headStyle,
+      self.hairColor,
+    );
     if (epoch !== this.loadEpoch) return;
 
     await Promise.all(peers.map((p) => this.addOrUpdatePeer(p)));
@@ -427,7 +567,14 @@ export class WorldScene extends Phaser.Scene {
     this.peers.set(summary.id, peer);
     this.updateStatus();
 
-    await this.applyDollPreset(doll, summary.presetId);
+    await loadPresetToDoll(
+      this,
+      this.manifest,
+      doll,
+      summary.presetId,
+      summary.headStyle,
+      summary.hairColor,
+    );
   }
 
   private removePeer(id: string): void {
@@ -464,21 +611,6 @@ export class WorldScene extends Phaser.Scene {
     peer.moving = true;
     peer.doll.setDir(dir);
     peer.doll.setAnim(steps === 2 ? 'run' : 'walk');
-  }
-
-  private async applyDollPreset(doll: PaperDoll, presetId: string): Promise<void> {
-    const preset = this.manifest.classes[presetId];
-    if (!preset) return;
-    const entries = Object.entries(preset.layers) as [EquipLayer, string][];
-    const loaded = await Promise.all(
-      entries.map(async ([slot, file]) => {
-        const def = await ensureAnimSetLoaded(this, `avatar/${preset.base}/${file}`);
-        return [slot, def] as const;
-      }),
-    );
-    const layers: Partial<Record<EquipLayer, AnimSetDef>> = {};
-    for (const [slot, def] of loaded) layers[slot] = def;
-    doll.setLayers(layers);
   }
 
   private beginStep(dir: Dir, requestedSteps: 1 | 2): void {
@@ -565,13 +697,19 @@ export class WorldScene extends Phaser.Scene {
   private formatLabel(summary: PlayerSummary): string {
     const clsName =
       this.manifest.classes[summary.presetId]?.name.split('（')[0] ?? summary.presetId;
-    return `${summary.name} · ${clsName}`;
+    const lv = summary.level !== undefined ? `Lv.${summary.level} ` : '';
+    return `${lv}${summary.name} · ${clsName}`;
   }
 
   private updateSelfLabel(): void {
     const clsName = this.manifest.classes[this.presetId]?.name.split('（')[0] ?? this.presetId;
-    const tag = this.selfId ? `侠士-${this.selfId.slice(0, 4)}` : '我';
-    this.selfLabel.setText(`${tag} · ${clsName}`);
+    const tag = this.charStats
+      ? this.selfName
+      : this.selfId
+        ? `侠士-${this.selfId.slice(0, 4)}`
+        : '我';
+    const lv = this.charStats ? `Lv.${this.charStats.level} ` : '';
+    this.selfLabel.setText(`${lv}${tag} · ${clsName}`);
   }
 
   private setupUi(): void {
@@ -590,7 +728,9 @@ export class WorldScene extends Phaser.Scene {
       color: '#e5e7eb',
       fontFamily: 'system-ui, sans-serif',
       fontSize: '12px',
-      width: '280px',
+      width: 'min(290px, calc(100vw - 24px))',
+      maxHeight: 'calc(100vh - 24px)',
+      overflowY: 'auto',
       display: 'flex',
       flexDirection: 'column',
       gap: '6px',
@@ -599,9 +739,21 @@ export class WorldScene extends Phaser.Scene {
     root.addEventListener('pointerdown', (e) => e.stopPropagation());
 
     const title = document.createElement('div');
-    title.textContent = '2D 完美世界 (M1 多人格子世界)';
+    title.textContent = '2D 完美世界 (M2 角色存档世界)';
     Object.assign(title.style, { fontWeight: '700', color: '#f0d890', fontSize: '13px' });
     root.appendChild(title);
+
+    this.statsEl = document.createElement('div');
+    Object.assign(this.statsEl.style, {
+      fontSize: '11px',
+      color: '#cbd5e1',
+      background: 'rgba(24, 29, 44, 0.8)',
+      border: '1px solid #2e3448',
+      borderRadius: '6px',
+      padding: '6px 8px',
+      lineHeight: '1.5',
+    });
+    root.appendChild(this.statsEl);
 
     const row = (labelText: string, control: HTMLElement): void => {
       const line = document.createElement('label');
@@ -661,6 +813,21 @@ export class WorldScene extends Phaser.Scene {
     };
     row('显示阻挡/传送网格', dbgCheck);
 
+    const bagHeader = document.createElement('div');
+    bagHeader.textContent = '行囊背包（存档测试）';
+    Object.assign(bagHeader.style, {
+      fontSize: '11px',
+      color: '#f0d890',
+      fontWeight: '600',
+      borderTop: '1px solid #2b3042',
+      paddingTop: '6px',
+    });
+    root.appendChild(bagHeader);
+
+    this.bagListEl = document.createElement('div');
+    Object.assign(this.bagListEl.style, { display: 'flex', flexDirection: 'column', gap: '4px' });
+    root.appendChild(this.bagListEl);
+
     this.statusEl = document.createElement('div');
     Object.assign(this.statusEl.style, {
       color: '#9ca3af',
@@ -676,9 +843,27 @@ export class WorldScene extends Phaser.Scene {
     hint.style.fontSize = '11px';
     root.appendChild(hint);
 
+    const btnRow = document.createElement('div');
+    Object.assign(btnRow.style, { display: 'flex', gap: '6px' });
+
+    const lobbyBtn = document.createElement('button');
+    lobbyBtn.textContent = '返回选角大厅';
+    Object.assign(lobbyBtn.style, {
+      flex: '1',
+      background: '#2c2516',
+      color: '#fef08a',
+      border: '1px solid #a6863d',
+      borderRadius: '4px',
+      padding: '4px',
+      cursor: 'pointer',
+      fontSize: '12px',
+    });
+    lobbyBtn.onclick = () => this.scene.start('Lobby');
+
     const viewerBtn = document.createElement('button');
-    viewerBtn.textContent = '打开 M0.5 素材预览器';
+    viewerBtn.textContent = '素材预览器';
     Object.assign(viewerBtn.style, {
+      flex: '1',
       background: '#272b3b',
       color: '#d1d5db',
       border: '1px solid #4b5563',
@@ -688,12 +873,75 @@ export class WorldScene extends Phaser.Scene {
       fontSize: '12px',
     });
     viewerBtn.onclick = () => this.scene.start('Viewer', { returnScene: 'World' });
-    root.appendChild(viewerBtn);
+    btnRow.append(lobbyBtn, viewerBtn);
+    root.appendChild(btnRow);
 
     document.body.appendChild(root);
     this.uiEl = root;
     this.populateSelects();
+    this.renderBagAndStats();
     this.updateStatus();
+  }
+
+  private renderBagAndStats(): void {
+    if (this.statsEl) {
+      if (this.charStats) {
+        const s = this.charStats;
+        this.statsEl.innerHTML = `<div><b>${this.selfName}</b> · Lv.${s.level} (EXP ${s.exp})</div><div>生命 ${s.hp}/${s.maxHp} | 真气 ${s.mp}/${s.maxMp} | 金币 ${s.gold}</div>`;
+      } else {
+        this.statsEl.textContent = '游客模式（无持久化存档）';
+      }
+    }
+
+    if (!this.bagListEl) return;
+    this.bagListEl.innerHTML = '';
+    if (!this.charStats) {
+      const note = document.createElement('div');
+      note.textContent = '登录后进入角色可开启持久化行囊';
+      note.style.color = '#6b7280';
+      note.style.fontSize = '11px';
+      this.bagListEl.appendChild(note);
+      return;
+    }
+    if (this.charStats.bag.length === 0) {
+      const empty = document.createElement('div');
+      empty.textContent = '行囊空空如也';
+      empty.style.color = '#6b7280';
+      empty.style.fontSize = '11px';
+      this.bagListEl.appendChild(empty);
+      return;
+    }
+
+    for (const item of this.charStats.bag) {
+      const itemRow = document.createElement('div');
+      Object.assign(itemRow.style, {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        background: '#191d2b',
+        border: '1px solid #2e3448',
+        borderRadius: '4px',
+        padding: '3px 6px',
+        fontSize: '11px',
+      });
+      const text = document.createElement('span');
+      text.textContent = `${item.name} ×${item.count}`;
+      text.title = item.desc ?? '';
+      const useBtn = document.createElement('button');
+      useBtn.textContent = '使用';
+      Object.assign(useBtn.style, {
+        background: '#273047',
+        color: '#bae6fd',
+        border: '1px solid #3f4e73',
+        borderRadius: '3px',
+        padding: '1px 6px',
+        cursor: 'pointer',
+        fontSize: '11px',
+      });
+      useBtn.onclick = () => this.bridge?.conn.send({ t: 'useBagItem', slot: item.slot });
+      itemRow.append(text, useBtn);
+      this.bagListEl.appendChild(itemRow);
+    }
   }
 
   private populateSelects(): void {
@@ -729,6 +977,8 @@ export class WorldScene extends Phaser.Scene {
   private cleanup(): void {
     this.uiEl?.remove();
     this.uiEl = null;
+    this.statsEl = null;
+    this.bagListEl = null;
     this.clearPortalLabels();
     this.mapView?.destroy();
     this.mapView = null;

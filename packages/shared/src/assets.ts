@@ -156,6 +156,49 @@ export function stepAnimFrame(section: AnimSection, elapsedMs: number): number {
   return Math.min(frames - 1, Math.floor(((t % durationMs) / durationMs) * frames));
 }
 
+export interface HeadStyleOption {
+  id: string;
+  name: string;
+  bases: readonly AvatarBase[];
+}
+
+export const HEAD_STYLES: readonly HeadStyleOption[] = [
+  { id: 'head_short', name: '利落短发', bases: ['male'] },
+  { id: 'head_bald', name: '禅武光头', bases: ['male'] },
+  { id: 'head_long', name: '飘逸长发', bases: ['female', 'female_dark'] },
+  { id: 'leather_hood', name: '游侠皮兜帽', bases: ['male', 'female', 'female_dark'] },
+  { id: 'mage_hood', name: '秘法兜帽', bases: ['male', 'female', 'female_dark'] },
+  { id: 'mage_hood_alt1', name: '羽灵圣冠', bases: ['male', 'female', 'female_dark'] },
+  { id: 'chain_coif', name: '锁甲头巾', bases: ['male', 'female', 'female_dark'] },
+  { id: 'plate_helm', name: '重装铁盔', bases: ['male', 'female', 'female_dark'] },
+];
+
+export interface HairColorOption {
+  id: string;
+  name: string;
+  hex: string;
+  tint: number;
+}
+
+export const HAIR_COLORS: readonly HairColorOption[] = [
+  { id: 'natural', name: '原色', hex: '#ffffff', tint: 0xffffff },
+  { id: 'gold', name: '金棕', hex: '#fcd34d', tint: 0xfcd34d },
+  { id: 'crimson', name: '赤红', hex: '#f87171', tint: 0xf87171 },
+  { id: 'azure', name: '冰蓝', hex: '#7dd3fc', tint: 0x7dd3fc },
+  { id: 'violet', name: '紫霞', hex: '#c4b5fd', tint: 0xc4b5fd },
+  { id: 'jade', name: '翠绿', hex: '#6ee7b7', tint: 0x6ee7b7 },
+];
+
+/** Return all selectable head/hairstyle presets compatible with `base`. */
+export function getHeadStylesForBase(base: AvatarBase): HeadStyleOption[] {
+  return HEAD_STYLES.filter((h) => h.bases.includes(base));
+}
+
+/** Resolve a saved hair/head color id into a Phaser hex tint number. */
+export function resolveHairTint(colorId?: string): number {
+  return HAIR_COLORS.find((c) => c.id === colorId)?.tint ?? 0xffffff;
+}
+
 /**
  * Logical appearance manifest mapping PWI 1.3.6 presets, monsters, NPCs,
  * skill VFX, and maps to Flare asset files. Swapping art later only requires

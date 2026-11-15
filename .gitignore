@@ -5,6 +5,8 @@ dist/
 .env
 *.sqlite
 *.sqlite-journal
+*.sqlite-*
+data/
 
 # Third-party art is fetched by tools/fetch-assets.sh, not committed
 assets/vendor/

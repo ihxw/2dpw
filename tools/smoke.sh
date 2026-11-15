@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
-# M0/M1 smoke test: boot server + vite, verify assets, WS handshake, AOI join, move, and correction.
+# End-to-end smoke test: boot game server on an isolated port/DB and verify assets, WS AOI/move/correct, and M2 auth/create/bag/resume persistence.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-npx tsx packages/server/src/main.ts > /tmp/2dpw-server.log 2>&1 &
+if [ ! -f packages/client/dist/index.html ]; then
+  npm run build >/dev/null
+fi
+SMOKE_PORT="${SMOKE_PORT:-17788}"
+SMOKE_DB="/tmp/2dpw-smoke-$$.sqlite"
+HOST=127.0.0.1 PORT="$SMOKE_PORT" DB_PATH="$SMOKE_DB" npx tsx packages/server/src/main.ts > /tmp/2dpw-server.log 2>&1 &
 SP=$!
-(cd packages/client && npx vite --port 5173 --strictPort > /tmp/2dpw-vite.log 2>&1) &
-VP=$!
-trap 'kill $SP $VP 2>/dev/null || true; pkill -f "vite --port 5173" 2>/dev/null || true' EXIT
-for _ in $(seq 1 30); do curl -sf localhost:5173/ >/dev/null && curl -sf localhost:7788/health >/dev/null && break; sleep 0.5; done
+trap 'kill $SP 2>/dev/null || true; rm -f "${SMOKE_DB}"* 2>/dev/null || true' EXIT
+for _ in $(seq 1 30); do curl -sf "http://127.0.0.1:${SMOKE_PORT}/health" >/dev/null && break; sleep 0.5; done
 
-echo "health: $(curl -s localhost:7788/health)"
-echo "index.html: $(curl -s -o /dev/null -w '%{http_code}' localhost:5173/)"
-echo "main.ts:    $(curl -s -o /dev/null -w '%{http_code}' localhost:5173/src/main.ts)"
+echo "health: $(curl -s "http://127.0.0.1:${SMOKE_PORT}/health")"
+echo "index.html: $(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${SMOKE_PORT}/")"
 for asset in \
   /assets/generated/manifest.json \
   /assets/generated/maps/arrival.json \
   /assets/vendor/flare-game/mods/fantasycore/images/tilesets/tileset_grassland.png; do
-  code=$(curl -s -o /dev/null -w '%{http_code}' "localhost:5173${asset}")
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${SMOKE_PORT}${asset}")
   echo "${asset}: ${code}"
   if [ "$code" != "200" ]; then
     echo "ERROR: expected 200 for ${asset}, got ${code}"
@@ -24,11 +26,12 @@ for asset in \
   fi
 done
 
-npx tsx -e '
+SMOKE_PORT="$SMOKE_PORT" npx tsx -e '
 import fs from "node:fs";
 import { WebSocket } from "ws";
 import { canStep, type Dir, type MapDef, type S2C } from "./packages/shared/src/index.ts";
 
+const smokePort = process.env.SMOKE_PORT || "17788";
 const map = JSON.parse(fs.readFileSync("assets/generated/maps/arrival.json", "utf8")) as MapDef;
 
 function connectClient(label: string) {
@@ -38,7 +41,7 @@ function connectClient(label: string) {
     inbox: S2C[];
     nextMsg: (pred: (m: S2C) => boolean, ms?: number) => Promise<S2C>;
   }>((resolve, reject) => {
-    const ws = new WebSocket("ws://localhost:5173/ws");
+    const ws = new WebSocket(`ws://127.0.0.1:${smokePort}/ws`);
     const inbox: S2C[] = [];
     const waiters: Array<{ pred: (m: S2C) => boolean; res: (m: S2C) => void; rej: (e: Error) => void; timer: NodeJS.Timeout }> = [];
     const timer = setTimeout(() => reject(new Error(`${label}: connect timeout`)), 5000);
@@ -155,6 +158,51 @@ async function main() {
 
   a.ws.close();
   b.ws.close();
+
+  const c = await connectClient("C");
+  c.ws.send(JSON.stringify({ t: "register", username: "smokeuser1", password: "pw1234" }));
+  const authC = await c.nextMsg((m) => m.t === "authOk");
+  if (authC.t !== "authOk" || !authC.token) throw new Error("register failed");
+
+  c.ws.send(
+    JSON.stringify({
+      t: "createCharacter",
+      name: "冒烟侠客",
+      classId: "barbarian",
+      gender: "male",
+      headStyle: "plate_helm",
+      hairColor: "gold",
+    }),
+  );
+  const charList = await c.nextMsg((m) => m.t === "characterList");
+  if (charList.t !== "characterList" || charList.characters.length !== 1) {
+    throw new Error("createCharacter failed");
+  }
+  const createdChar = charList.characters[0]!;
+
+  c.ws.send(JSON.stringify({ t: "enterWorld", charId: createdChar.id }));
+  const joinedC = await c.nextMsg((m) => m.t === "joined");
+  if (joinedC.t !== "joined") throw new Error("enterWorld failed");
+
+  c.ws.send(JSON.stringify({ t: "move", seq: 1, dir: walkDir, steps: 1 }));
+  await c.nextMsg((m) => m.t === "entityMoved" && m.id === c.sessionId);
+
+  c.ws.send(JSON.stringify({ t: "useBagItem", slot: 2 }));
+  const statsC = await c.nextMsg((m) => m.t === "charStats");
+  if (statsC.t !== "charStats" || statsC.level !== 2) {
+    throw new Error("useBagItem scroll_exp did not level up to 2");
+  }
+  c.ws.close();
+
+  await new Promise((r) => setTimeout(r, 80));
+  const d = await connectClient("D");
+  d.ws.send(JSON.stringify({ t: "resume", token: authC.token }));
+  const resumed = await d.nextMsg((m) => m.t === "authOk");
+  if (resumed.t !== "authOk" || resumed.characters[0]?.level !== 2 || resumed.characters[0]?.x !== afterWalk.x) {
+    throw new Error("resume persistence check failed");
+  }
+  d.ws.close();
+  console.log("ws account/create/bag/save ok:", resumed.characters[0]?.name, "Lv." + resumed.characters[0]?.level);
   console.log("SMOKE OK");
 }
 
