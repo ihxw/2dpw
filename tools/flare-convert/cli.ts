@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_MANIFEST, HEAD_STYLES, type AvatarBase } from '@2dpw/shared';
 import { parseFlareAnimTxt, parseFlareMapTxt, parseFlareTilesetTxt } from './convert.ts';
+import { generatePwiAssets } from './pwi-gen.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
 const VENDOR_MODS = path.join(ROOT, 'assets/vendor/flare-game/mods');
@@ -39,21 +40,21 @@ function main(): void {
 
   let count = 0;
 
-  // 1. Collect all avatar equipment layer basenames from DEFAULT_MANIFEST + HEAD_STYLES
-  const avatarFiles = new Set<string>();
+  // 1. Collect all Flare avatar equipment layer basenames from DEFAULT_MANIFEST + HEAD_STYLES
+  const avatarFiles = new Set<string>(['head_short', 'head_long']);
   for (const preset of Object.values(DEFAULT_MANIFEST.classes)) {
     for (const file of Object.values(preset.layers)) {
-      if (file) avatarFiles.add(file);
+      if (file && !file.startsWith('pwi_')) avatarFiles.add(file);
     }
   }
   for (const head of HEAD_STYLES) {
-    avatarFiles.add(head.id);
+    if (!head.id.startsWith('pwi_')) avatarFiles.add(head.id);
   }
 
-  // Verify every class preset's exact layers exist
+  // Verify every class preset's Flare base layers exist (PWI custom layers are synthesized below)
   for (const preset of Object.values(DEFAULT_MANIFEST.classes)) {
     for (const [slot, file] of Object.entries(preset.layers)) {
-      if (!file) continue;
+      if (!file || file.startsWith('pwi_')) continue;
       const rel = `animations/avatar/${preset.base}/${file}.txt`;
       if (!fs.existsSync(path.join(FANTASY_CORE, rel))) {
         throw new Error(`Missing avatar layer for ${preset.id}.${slot}: ${rel}`);
@@ -104,8 +105,9 @@ function main(): void {
     count++;
   }
 
-  // 5. Tilesets
+  // 5. Flare base Tilesets (PWI xianxia tilesets are generated below)
   for (const tsId of DEFAULT_MANIFEST.tilesets) {
+    if (tsId.startsWith('tileset_pwi_')) continue;
     const rel = `tilesetdefs/${tsId}.txt`;
     const ts = parseFlareTilesetTxt(tsId, readFantasyCore(rel));
     assertImagesExist(ts.images, ts.id);
@@ -113,20 +115,28 @@ function main(): void {
     count++;
   }
 
-  // 6. Maps
+  // 6. Maps (parse Flare base maps first if present, then overwrite with custom PWI 1.3.6 maps)
   for (const entry of Object.values(DEFAULT_MANIFEST.maps)) {
     const srcPath = path.join(EMPYREAN, `maps/${entry.file}.txt`);
-    const map = parseFlareMapTxt(entry.file, fs.readFileSync(srcPath, 'utf-8'));
-    map.portals = map.portals.filter((p) => p.targetMap in DEFAULT_MANIFEST.maps);
-    writeJson(`maps/${entry.file}.json`, map);
-    count++;
+    if (fs.existsSync(srcPath)) {
+      const map = parseFlareMapTxt(entry.file, fs.readFileSync(srcPath, 'utf-8'));
+      map.portals = map.portals.filter((p) => p.targetMap in DEFAULT_MANIFEST.maps);
+      writeJson(`maps/${entry.file}.json`, map);
+      count++;
+    }
   }
+
+  // 6.5 Generate custom PWI 1.3.6 tilesets, 4 maps, and racial/class avatar sprites
+  const pwiCount = generatePwiAssets(path.join(ROOT, 'assets/vendor/flare-game'), OUT_DIR);
+  count += pwiCount;
 
   // 7. Manifest
   writeJson('manifest.json', DEFAULT_MANIFEST);
   count++;
 
-  console.log(`[flare-convert] wrote ${count} JSON files to ${path.relative(ROOT, OUT_DIR)}`);
+  console.log(
+    `[flare-convert] wrote ${count} assets (including ${pwiCount} PWI 2D xianxia files) to ${path.relative(ROOT, OUT_DIR)}`,
+  );
 }
 
 main();

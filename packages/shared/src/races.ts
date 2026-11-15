@@ -28,3 +28,15 @@ export const CLASSES: Readonly<Record<ClassId, ClassDef>> = {
 export function isValidClassGender(cls: ClassId, gender: Gender): boolean {
   return CLASSES[cls].genders.includes(gender);
 }
+
+/** Return PWI 1.3.6 cultivation realm (修真境界) title for a character level. */
+export function getCultivationRealm(level: number): string {
+  if (level >= 70) return '大乘';
+  if (level >= 60) return '渡劫';
+  if (level >= 50) return '履霜';
+  if (level >= 40) return '空冥';
+  if (level >= 30) return '元婴';
+  if (level >= 20) return '和合';
+  if (level >= 10) return '灵虚';
+  return '筑基';
+}

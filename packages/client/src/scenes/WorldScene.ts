@@ -9,12 +9,14 @@ import {
   canStep,
   cellToScreen,
   findPath,
+  getCultivationRealm,
   getHeadStylesForBase,
   pathToSteps,
   screenToCell,
   type AppearanceManifest,
   type Cell,
   type InventoryItem,
+  type MapPortal,
   type MoveStep,
   type PlayerSummary,
   type S2C,
@@ -92,7 +94,19 @@ export class WorldScene extends Phaser.Scene {
   private bridge!: NetBridge;
   private manifest: AppearanceManifest = DEFAULT_MANIFEST;
   private mapView: IsoMapView | null = null;
+  private portals: MapPortal[] = [];
   private portalLabels: Phaser.GameObjects.Text[] = [];
+  private portalGfx!: Phaser.GameObjects.Graphics;
+  private ambientGfx!: Phaser.GameObjects.Graphics;
+  private vfxTime = 0;
+  private ambientMotes: {
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    r: number;
+    phase: number;
+  }[] = [];
   private targetGfx!: Phaser.GameObjects.Graphics;
 
   private selfId = '';
@@ -176,6 +190,9 @@ export class WorldScene extends Phaser.Scene {
       .setDepth(850000);
 
     this.targetGfx = this.add.graphics().setDepth(-1).setVisible(false);
+    this.portalGfx = this.add.graphics().setDepth(-50000);
+    this.ambientGfx = this.add.graphics().setDepth(860000).setScrollFactor(0);
+    this.initAmbientMotes();
 
     if (this.input.keyboard) {
       this.keys = {
@@ -267,6 +284,9 @@ export class WorldScene extends Phaser.Scene {
     }
 
     this.actor.update(delta);
+    this.vfxTime += delta * 0.002;
+    this.drawPortals();
+    this.updateAmbientMotes(delta);
 
     for (const peer of this.peers.values()) {
       if (peer.moving) {
@@ -485,6 +505,7 @@ export class WorldScene extends Phaser.Scene {
       this.mapView?.destroy();
       this.mapView = new IsoMapView(this, map, tileset, this.debugVisible);
       this.currentMapId = self.mapId;
+      this.portals = map.portals;
 
       for (const p of map.portals) {
         const s = cellToScreen(p.x + (p.w - 1) / 2, p.y + (p.h - 1) / 2);
@@ -697,7 +718,10 @@ export class WorldScene extends Phaser.Scene {
   private formatLabel(summary: PlayerSummary): string {
     const clsName =
       this.manifest.classes[summary.presetId]?.name.split('（')[0] ?? summary.presetId;
-    const lv = summary.level !== undefined ? `Lv.${summary.level} ` : '';
+    const lv =
+      summary.level !== undefined
+        ? `Lv.${summary.level}【${getCultivationRealm(summary.level)}】 `
+        : '';
     return `${lv}${summary.name} · ${clsName}`;
   }
 
@@ -708,7 +732,9 @@ export class WorldScene extends Phaser.Scene {
       : this.selfId
         ? `侠士-${this.selfId.slice(0, 4)}`
         : '我';
-    const lv = this.charStats ? `Lv.${this.charStats.level} ` : '';
+    const lv = this.charStats
+      ? `Lv.${this.charStats.level}【${getCultivationRealm(this.charStats.level)}】 `
+      : '';
     this.selfLabel.setText(`${lv}${tag} · ${clsName}`);
   }
 
@@ -887,7 +913,8 @@ export class WorldScene extends Phaser.Scene {
     if (this.statsEl) {
       if (this.charStats) {
         const s = this.charStats;
-        this.statsEl.innerHTML = `<div><b>${this.selfName}</b> · Lv.${s.level} (EXP ${s.exp})</div><div>生命 ${s.hp}/${s.maxHp} | 真气 ${s.mp}/${s.maxMp} | 金币 ${s.gold}</div>`;
+        const realm = getCultivationRealm(s.level);
+        this.statsEl.innerHTML = `<div><b>${this.selfName}</b> · Lv.${s.level} 【${realm}】 (EXP ${s.exp})</div><div>生命 ${s.hp}/${s.maxHp} | 真气 ${s.mp}/${s.maxMp} | 金币 ${s.gold}</div>`;
       } else {
         this.statsEl.textContent = '游客模式（无持久化存档）';
       }
@@ -972,6 +999,99 @@ export class WorldScene extends Phaser.Scene {
   private clearPortalLabels(): void {
     for (const lbl of this.portalLabels) lbl.destroy();
     this.portalLabels = [];
+    this.portals = [];
+  }
+
+  private initAmbientMotes(): void {
+    const w = this.scale.width || 1280;
+    const h = this.scale.height || 720;
+    this.ambientMotes = Array.from({ length: 28 }, (_, i) => ({
+      x: ((i * 173) % 1000) * (w / 1000),
+      y: ((i * 293) % 1000) * (h / 1000),
+      vx: -14 + ((i * 37) % 28),
+      vy: 18 + ((i * 23) % 24),
+      r: 2.2 + (i % 3) * 0.9,
+      phase: i * 0.7,
+    }));
+  }
+
+  private drawPortals(): void {
+    const g = this.portalGfx;
+    g.clear();
+    if (this.portals.length === 0) return;
+
+    for (const p of this.portals) {
+      const s = cellToScreen(p.x + (p.w - 1) / 2, p.y + (p.h - 1) / 2);
+      const pulse = 0.72 + Math.sin(this.vfxTime * 2) * 0.25;
+
+      // Outer golden-cyan Bagua isometric rings
+      g.fillStyle(0x38bdf8, 0.14 * pulse);
+      g.fillEllipse(s.x, s.y, 150, 75);
+      g.lineStyle(2.2, 0xfacc15, 0.78 * pulse);
+      g.strokeEllipse(s.x, s.y, 146, 73);
+      g.lineStyle(1.6, 0x67e8f9, 0.75 * pulse);
+      g.strokeEllipse(s.x, s.y, 108, 54);
+      g.lineStyle(1.2, 0xfef08a, 0.55);
+      g.strokeEllipse(s.x, s.y, 68, 34);
+
+      // Rotating 8 Bagua nodes around the portal ring
+      for (let i = 0; i < 8; i++) {
+        const a = this.vfxTime * 0.9 + (i * Math.PI) / 4;
+        const rx = s.x + Math.cos(a) * 62;
+        const ry = s.y + Math.sin(a) * 31;
+        g.fillStyle(i % 2 === 0 ? 0xfacc15 : 0x67e8f9, 0.92);
+        g.fillCircle(rx, ry, 3.2);
+      }
+
+      // Soft vertical light pillar shimmer
+      g.fillStyle(0x67e8f9, 0.08 * pulse);
+      g.fillRect(s.x - 24, s.y - 84, 48, 84);
+    }
+  }
+
+  private updateAmbientMotes(deltaMs: number): void {
+    const g = this.ambientGfx;
+    g.clear();
+    const w = this.scale.width || 1280;
+    const h = this.scale.height || 720;
+    const dt = Math.min(0.05, deltaMs / 1000);
+    const isCave = this.currentMapId === 'goblin_cave';
+    const isCity = this.currentMapId === 'perdition_harbor';
+
+    for (const m of this.ambientMotes) {
+      const sway = Math.sin(this.vfxTime * 1.4 + m.phase) * 18;
+      if (isCave || isCity) {
+        m.x += (m.vx * 0.4 + sway * 0.5) * dt;
+        m.y -= m.vy * 0.85 * dt;
+      } else {
+        m.x += (m.vx + sway) * dt;
+        m.y += m.vy * dt;
+      }
+
+      if (m.y > h + 16) {
+        m.y = -12;
+        m.x = (m.x + w) % w;
+      } else if (m.y < -16) {
+        m.y = h + 12;
+        m.x = (m.x + w) % w;
+      }
+      if (m.x < -16) m.x = w + 12;
+      if (m.x > w + 16) m.x = -12;
+
+      if (isCave) {
+        // Rising fiery cave embers
+        g.fillStyle(m.phase % 2 > 1 ? 0xf97316 : 0xfacc15, 0.72);
+        g.fillCircle(m.x, m.y, m.r * 0.85);
+      } else if (isCity) {
+        // Imperial Dragon City golden Qi motes
+        g.fillStyle(m.phase % 2 > 1 ? 0xfef08a : 0x67e8f9, 0.65);
+        g.fillCircle(m.x, m.y, m.r * 0.9);
+      } else {
+        // Falling spring peach-blossom petals in arrival / river_trail
+        g.fillStyle(m.phase % 2 > 1 ? 0xfbcfe8 : 0xf472b6, 0.78);
+        g.fillEllipse(m.x, m.y, m.r * 2.1, m.r * 1.15);
+      }
+    }
   }
 
   private cleanup(): void {
@@ -983,6 +1103,8 @@ export class WorldScene extends Phaser.Scene {
     this.mapView?.destroy();
     this.mapView = null;
     this.targetGfx.destroy();
+    this.portalGfx.destroy();
+    this.ambientGfx.destroy();
     this.selfLabel.destroy();
     for (const peer of this.peers.values()) {
       peer.doll.destroy();

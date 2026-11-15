@@ -5,6 +5,7 @@ import {
   Dir,
   HAIR_COLORS,
   RACE_NAMES,
+  getCultivationRealm,
   getHeadStylesForBase,
   type AppearanceManifest,
   type CharacterSummary,
@@ -271,7 +272,7 @@ export class LobbyScene extends Phaser.Scene {
     }
   }
 
-  private syncDraftAppearanceDefaults(): void {
+  private syncDraftAppearanceDefaults(snapClassDefaultHead = false): void {
     const cls = CLASSES[this.draftClass];
     if (!cls.genders.includes(this.draftGender)) {
       this.draftGender = cls.genders[0]!;
@@ -280,7 +281,7 @@ export class LobbyScene extends Phaser.Scene {
     const preset = this.manifest.classes[presetId];
     if (!preset) return;
     const validHeads = getHeadStylesForBase(preset.base);
-    if (!validHeads.some((h) => h.id === this.draftHead)) {
+    if (snapClassDefaultHead || !validHeads.some((h) => h.id === this.draftHead)) {
       this.draftHead = preset.layers.head ?? validHeads[0]?.id ?? 'head_short';
     }
   }
@@ -292,7 +293,8 @@ export class LobbyScene extends Phaser.Scene {
     if (this.mode === 'select' && this.selectedCharId) {
       const char = this.characters.find((c) => c.id === this.selectedCharId);
       if (char) {
-        this.stageTitle.setText(`${char.name}  Lv.${char.level}`);
+        const realm = getCultivationRealm(char.level);
+        this.stageTitle.setText(`${char.name}  Lv.${char.level}【${realm}】`);
         const clsName = CLASSES[char.classId]?.name ?? char.classId;
         const mapName = this.manifest.maps[char.mapId]?.name ?? char.mapId;
         this.stageSub.setText(
@@ -498,7 +500,7 @@ export class LobbyScene extends Phaser.Scene {
         fontWeight: '600',
         color: selected ? '#fef08a' : '#f3f4f6',
       });
-      top.textContent = `${c.name} (Lv.${c.level})`;
+      top.textContent = `${c.name} (Lv.${c.level} · 【${getCultivationRealm(c.level)}】)`;
 
       const sub = document.createElement('div');
       const clsName = CLASSES[c.classId]?.name ?? c.classId;
@@ -564,7 +566,7 @@ export class LobbyScene extends Phaser.Scene {
           this.draftRace = race;
           const firstCls = Object.values(CLASSES).find((c) => c.race === race)!;
           this.draftClass = firstCls.id;
-          this.syncDraftAppearanceDefaults();
+          this.syncDraftAppearanceDefaults(true);
           this.renderPanel();
           void this.updatePreviewDoll();
         },
@@ -584,7 +586,7 @@ export class LobbyScene extends Phaser.Scene {
         `${cls.name} — ${CLASS_TAGS[cls.id]}`,
         () => {
           this.draftClass = cls.id;
-          this.syncDraftAppearanceDefaults();
+          this.syncDraftAppearanceDefaults(true);
           this.renderPanel();
           void this.updatePreviewDoll();
         },

@@ -113,6 +113,7 @@ export interface ClassPreset {
   name: string;
   base: AvatarBase;
   layers: Partial<Record<EquipLayer, string>>;
+  tint?: number;
 }
 
 export interface NamedAssetEntry {
@@ -163,6 +164,11 @@ export interface HeadStyleOption {
 }
 
 export const HEAD_STYLES: readonly HeadStyleOption[] = [
+  { id: 'pwi_wuxia_crown', name: '金龙束发冠（武侠）', bases: ['male', 'female', 'female_dark'] },
+  { id: 'pwi_fashi_crown', name: '太极紫金冠（法师）', bases: ['male', 'female', 'female_dark'] },
+  { id: 'pwi_elf_head', name: '天生双白羽（羽族）', bases: ['male', 'female', 'female_dark'] },
+  { id: 'pwi_tiger_head', name: '白虎战神首（妖兽专属）', bases: ['male'] },
+  { id: 'pwi_fox_head', name: '灵狐仙耳冠（妖精专属）', bases: ['female', 'female_dark'] },
   { id: 'head_short', name: '利落短发', bases: ['male'] },
   { id: 'head_bald', name: '禅武光头', bases: ['male'] },
   { id: 'head_long', name: '飘逸长发', bases: ['female', 'female_dark'] },
@@ -212,8 +218,9 @@ export const DEFAULT_MANIFEST: AppearanceManifest = {
       gender: 'male',
       name: '武侠·男（人族）',
       base: 'male',
+      tint: 0xffdd77,
       layers: {
-        head: 'head_short',
+        head: 'pwi_wuxia_crown',
         chest: 'chain_cuirass',
         legs: 'chain_greaves',
         feet: 'chain_boots',
@@ -228,8 +235,9 @@ export const DEFAULT_MANIFEST: AppearanceManifest = {
       gender: 'female',
       name: '武侠·女（人族）',
       base: 'female',
+      tint: 0xffdd77,
       layers: {
-        head: 'head_long',
+        head: 'pwi_wuxia_crown',
         chest: 'chain_cuirass',
         legs: 'chain_greaves',
         feet: 'chain_boots',
@@ -243,8 +251,9 @@ export const DEFAULT_MANIFEST: AppearanceManifest = {
       gender: 'male',
       name: '法师·男（人族）',
       base: 'male',
+      tint: 0x77ddff,
       layers: {
-        head: 'mage_hood',
+        head: 'pwi_fashi_crown',
         chest: 'mage_vest',
         legs: 'mage_skirt',
         feet: 'mage_boots',
@@ -258,8 +267,9 @@ export const DEFAULT_MANIFEST: AppearanceManifest = {
       gender: 'female',
       name: '法师·女（人族）',
       base: 'female',
+      tint: 0x77ddff,
       layers: {
-        head: 'mage_hood',
+        head: 'pwi_fashi_crown',
         chest: 'mage_vest',
         legs: 'mage_skirt',
         feet: 'mage_boots',
@@ -273,8 +283,9 @@ export const DEFAULT_MANIFEST: AppearanceManifest = {
       gender: 'male',
       name: '羽芒·男（羽族）',
       base: 'male',
+      tint: 0xbbffdd,
       layers: {
-        head: 'leather_hood',
+        head: 'pwi_elf_head',
         chest: 'leather_chest',
         legs: 'leather_pants',
         feet: 'leather_boots',
@@ -288,8 +299,9 @@ export const DEFAULT_MANIFEST: AppearanceManifest = {
       gender: 'female',
       name: '羽芒·女（羽族）',
       base: 'female',
+      tint: 0xbbffdd,
       layers: {
-        head: 'leather_hood',
+        head: 'pwi_elf_head',
         chest: 'leather_chest',
         legs: 'leather_pants',
         feet: 'leather_boots',
@@ -303,8 +315,9 @@ export const DEFAULT_MANIFEST: AppearanceManifest = {
       gender: 'male',
       name: '羽灵·男（羽族）',
       base: 'male',
+      tint: 0xffeeaa,
       layers: {
-        head: 'head_short',
+        head: 'pwi_elf_head',
         chest: 'mage_vest_alt1',
         legs: 'mage_skirt_alt1',
         feet: 'mage_boots_alt1',
@@ -319,8 +332,9 @@ export const DEFAULT_MANIFEST: AppearanceManifest = {
       gender: 'female',
       name: '羽灵·女（羽族）',
       base: 'female',
+      tint: 0xffeeaa,
       layers: {
-        head: 'head_long',
+        head: 'pwi_elf_head',
         chest: 'mage_vest_alt1',
         legs: 'mage_skirt_alt1',
         feet: 'mage_boots_alt1',
@@ -335,8 +349,9 @@ export const DEFAULT_MANIFEST: AppearanceManifest = {
       gender: 'male',
       name: '妖兽·男（妖族）',
       base: 'male',
+      tint: 0xffffff,
       layers: {
-        head: 'plate_helm',
+        head: 'pwi_tiger_head',
         chest: 'plate_cuirass',
         legs: 'plate_greaves',
         feet: 'plate_boots',
@@ -351,8 +366,9 @@ export const DEFAULT_MANIFEST: AppearanceManifest = {
       gender: 'female',
       name: '妖精·女（妖族）',
       base: 'female_dark',
+      tint: 0xffbbee,
       layers: {
-        head: 'head_long',
+        head: 'pwi_fox_head',
         chest: 'mage_vest_alt2',
         legs: 'mage_skirt_alt2',
         feet: 'mage_boots_alt2',
@@ -395,10 +411,22 @@ export const DEFAULT_MANIFEST: AppearanceManifest = {
     'power.blast': { name: '真气爆发', file: 'blast' },
   },
   maps: {
-    arrival: { name: '新手降临谷', file: 'arrival', tileset: 'tileset_grassland' },
-    perdition_harbor: { name: '祖龙港口', file: 'perdition_harbor', tileset: 'tileset_grassland' },
-    river_trail: { name: '河畔小径', file: 'river_trail', tileset: 'tileset_grassland' },
-    goblin_cave: { name: '19级副本·地精洞穴', file: 'goblin_cave', tileset: 'tileset_cave' },
+    arrival: { name: '桃源镇·仙缘谷 (新手降临)', file: 'arrival', tileset: 'tileset_pwi_xianxia' },
+    perdition_harbor: {
+      name: '祖龙城·中央皇城 (万流归宗)',
+      file: 'perdition_harbor',
+      tileset: 'tileset_pwi_xianxia',
+    },
+    river_trail: {
+      name: '信风镇·镜湖仙踪 (野外历练)',
+      file: 'river_trail',
+      tileset: 'tileset_pwi_xianxia',
+    },
+    goblin_cave: {
+      name: '19级副本·火岩洞穴 (玄冥秘境)',
+      file: 'goblin_cave',
+      tileset: 'tileset_pwi_cave',
+    },
   },
-  tilesets: ['tileset_grassland', 'tileset_cave'],
+  tilesets: ['tileset_grassland', 'tileset_cave', 'tileset_pwi_xianxia', 'tileset_pwi_cave'],
 };
