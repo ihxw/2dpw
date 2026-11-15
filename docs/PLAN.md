@@ -206,10 +206,10 @@ flowchart LR
 ### M0.5 — Flare 素材管线（约 1 周）
 
 - [x] 拉取 Flare 素材（`tools/fetch-assets.sh`）
-- [ ] `tools/flare-convert`：动画 txt → Phaser atlas JSON（带锚点），按 外观 × 动作 打包
-- [ ] 地图 txt + tilesetdef → 地图 JSON（地面层、物件层、阻挡、传送点）
-- [ ] `tools/viewer`：浏览器预览 纸娃娃 8 方向动画 / 怪物 / 技能特效 / 整张地图
-- [ ] 外观 manifest 初版：6 职业 × 性别的初始装备，以及 10 种左右怪物
+- [x] `tools/flare-convert`：动画 txt → JSON（含锚点与多图集支持）
+- [x] 地图 txt + tilesetdef → 地图 JSON（地面层、物件层、阻挡、传送点、刷怪）
+- [x] 预览器（`ViewerScene`，访问 `?scene=viewer` 或点击启动页按钮）：浏览器预览 纸娃娃 8 方向动画 / 怪物 / NPC / 技能特效 / 整张地图
+- [x] 外观 manifest 初版（`DEFAULT_MANIFEST`）：6 职业 × 性别（10 套预设）、12 种怪物、5 种 NPC、10 种技能特效、4 张地图
 - **退出标准**：viewer 能正确显示一张 Flare 地图（遮挡正确），角色 8 方向各动作的分层对得上，不抖。
 
 ### M1 — 地图渲染与格子移动（约 2 周）

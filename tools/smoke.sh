@@ -12,6 +12,17 @@ for _ in $(seq 1 30); do curl -sf localhost:5173/ >/dev/null && curl -sf localho
 echo "health: $(curl -s localhost:7788/health)"
 echo "index.html: $(curl -s -o /dev/null -w '%{http_code}' localhost:5173/)"
 echo "main.ts:    $(curl -s -o /dev/null -w '%{http_code}' localhost:5173/src/main.ts)"
+for asset in \
+  /assets/generated/manifest.json \
+  /assets/generated/maps/arrival.json \
+  /assets/vendor/flare-game/mods/fantasycore/images/tilesets/tileset_grassland.png; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "localhost:5173${asset}")
+  echo "${asset}: ${code}"
+  if [ "$code" != "200" ]; then
+    echo "ERROR: expected 200 for ${asset}, got ${code}"
+    exit 1
+  fi
+done
 node -e "
 const WebSocket = require('ws');
 const ws = new WebSocket('ws://localhost:5173/ws');

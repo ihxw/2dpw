@@ -15,6 +15,7 @@ git -C "$DEST" sparse-checkout set --no-cone \
   /mods/fantasycore/animations/ \
   /mods/fantasycore/tilesetdefs/ \
   /mods/fantasycore/enemies/ \
+  /mods/fantasycore/engine/ \
   /mods/empyrean_campaign/maps/ \
   /CREDITS.txt /LICENSE.txt /README.md
 

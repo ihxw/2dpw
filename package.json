@@ -9,8 +9,9 @@
   ],
   "scripts": {
     "dev": "concurrently -k -n server,client -c blue,green \"npm:dev -w @2dpw/server\" \"npm:dev -w @2dpw/client\"",
+    "convert": "tsx tools/flare-convert/cli.ts",
     "build": "npm run build -w @2dpw/client",
-    "typecheck": "tsc -p packages/shared && tsc -p packages/server && tsc -p packages/client",
+    "typecheck": "tsc -p packages/shared && tsc -p packages/server && tsc -p packages/client && tsc -p tools",
     "test": "vitest run",
     "lint": "eslint .",
     "smoke": "bash tools/smoke.sh",

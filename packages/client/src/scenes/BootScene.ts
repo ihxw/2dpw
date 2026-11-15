@@ -18,6 +18,11 @@ export class BootScene extends Phaser.Scene {
   }
 
   create(): void {
+    if (new URLSearchParams(location.search).get('scene') === 'viewer') {
+      this.scene.start('Viewer');
+      return;
+    }
+
     const { width, height } = this.scale;
     this.add
       .text(width / 2, height / 2 - 80, '2D 完美世界', { fontSize: '40px', color: '#f0d890' })
@@ -37,7 +42,21 @@ export class BootScene extends Phaser.Scene {
       .text(width / 2, height / 2 + 50, '', { fontSize: '14px', color: '#888' })
       .setOrigin(0.5);
 
+    const viewerBtn = this.add
+      .text(width / 2, height / 2 + 100, '[ 进入 M0.5 素材与地图预览器 ]', {
+        fontSize: '16px',
+        color: '#f0d890',
+        backgroundColor: '#1f2538',
+        padding: { x: 14, y: 8 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+    viewerBtn.on('pointerover', () => viewerBtn.setStyle({ backgroundColor: '#2e3754' }));
+    viewerBtn.on('pointerout', () => viewerBtn.setStyle({ backgroundColor: '#1f2538' }));
+    viewerBtn.on('pointerdown', () => this.scene.start('Viewer'));
+
     this.conn = new Connection((s) => {
+      if (!this.sys.isActive()) return;
       this.status.setText(STATE_TEXT[s]);
       this.status.setColor(s === 'connected' ? '#7f7' : s === 'connecting' ? '#ccc' : '#f77');
     });
@@ -45,6 +64,6 @@ export class BootScene extends Phaser.Scene {
   }
 
   override update(): void {
-    if (this.conn.state === 'connected') this.rttText.setText(`延迟 ${this.conn.rtt} ms`);
+    if (this.conn?.state === 'connected') this.rttText.setText(`延迟 ${this.conn.rtt} ms`);
   }
 }
