@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.env
+*.sqlite
+*.sqlite-journal
+
+# Third-party art is fetched by tools/fetch-assets.sh, not committed
+assets/vendor/
+# Generated atlases / converted maps
+assets/generated/
+# Any proprietary game files (never commit)
+raw/
