@@ -1,5 +1,7 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
   PROTOCOL_VERSION,
@@ -14,6 +16,98 @@ import {
 import { World } from './world/World.ts';
 
 const port = Number(process.env.PORT ?? SERVER_PORT);
+const host = process.env.HOST ?? '0.0.0.0';
+const repoRoot = path.resolve(import.meta.dirname, '../../..');
+const assetsRoot = path.join(repoRoot, 'assets');
+const clientDistRoot = path.join(repoRoot, 'packages/client/dist');
+
+const CONTENT_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.txt': 'text/plain; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+};
+
+/** Serve a static file from `rootDir` while blocking directory traversal. */
+function serveFileFromRoot(
+  rootDir: string,
+  relPath: string,
+  res: ServerResponse,
+  headOnly = false,
+): boolean {
+  const normalized = path.resolve(rootDir);
+  const resolved = path.resolve(normalized, relPath);
+  if (resolved !== normalized && !resolved.startsWith(normalized + path.sep)) {
+    return false;
+  }
+
+  let stat: fs.Stats | null = null;
+  try {
+    stat = fs.statSync(resolved);
+  } catch {
+    stat = null;
+  }
+  if (!stat || !stat.isFile()) return false;
+
+  const ext = path.extname(resolved).toLowerCase();
+  res.writeHead(200, {
+    'content-type': CONTENT_TYPES[ext] ?? 'application/octet-stream',
+    'content-length': String(stat.size),
+  });
+  if (headOnly) {
+    res.end();
+  } else {
+    fs.createReadStream(resolved).pipe(res);
+  }
+  return true;
+}
+
+function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
+  const rawUrl = req.url ?? '/';
+  const pathname = rawUrl.split('?')[0] ?? '/';
+  const headOnly = req.method === 'HEAD';
+
+  if (pathname === '/health') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, sessions: sessions.size, players: world.size }));
+    return;
+  }
+
+  if (req.method !== 'GET' && !headOnly) {
+    res.writeHead(404).end();
+    return;
+  }
+
+  if (pathname.startsWith('/assets/')) {
+    let assetRel = '';
+    try {
+      assetRel = decodeURIComponent(pathname.slice('/assets/'.length));
+    } catch {
+      res.writeHead(400).end('Bad Request');
+      return;
+    }
+    if (serveFileFromRoot(assetsRoot, assetRel, res, headOnly)) return;
+  }
+
+  let distRel = '';
+  try {
+    distRel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname.slice(1));
+  } catch {
+    res.writeHead(400).end('Bad Request');
+    return;
+  }
+
+  if (serveFileFromRoot(clientDistRoot, distRel, res, headOnly)) return;
+  if (!path.extname(distRel) && serveFileFromRoot(clientDistRoot, 'index.html', res, headOnly)) {
+    return;
+  }
+
+  res.writeHead(404).end();
+}
 
 interface Session {
   id: string;
@@ -57,14 +151,7 @@ function handle(s: Session, msg: C2S): void {
   }
 }
 
-const http = createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, sessions: sessions.size, players: world.size }));
-    return;
-  }
-  res.writeHead(404).end();
-});
+const http = createServer(handleHttpRequest);
 
 const wss = new WebSocketServer({ server: http, path: WS_PATH });
 
@@ -93,8 +180,8 @@ setInterval(() => {
   tick++;
 }, 1000 / TICK_RATE);
 
-http.listen(port, () => {
-  console.log(`[server] listening on :${port}${WS_PATH} @ ${TICK_RATE}Hz`);
+http.listen(port, host, () => {
+  console.log(`[server] listening on http://${host}:${port}${WS_PATH} @ ${TICK_RATE}Hz`);
 });
 
 export { tick };

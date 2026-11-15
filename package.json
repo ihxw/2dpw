@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "dev": "concurrently -k -n server,client -c blue,green \"npm:dev -w @2dpw/server\" \"npm:dev -w @2dpw/client\"",
+    "start": "tsx packages/server/src/main.ts",
     "convert": "tsx tools/flare-convert/cli.ts",
     "build": "npm run build -w @2dpw/client",
     "typecheck": "tsc -p packages/shared && tsc -p packages/server && tsc -p packages/client && tsc -p tools",
